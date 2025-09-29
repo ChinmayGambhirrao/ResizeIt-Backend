@@ -4,12 +4,14 @@ import sharp, {type FitEnum} from "sharp";
 import archiver from "archiver";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
-import jwt from "jsonwebtoken";
 
 const app = express();
 
-// CORS - allow local Vite during dev
-app.use(cors({ origin: "http://localhost:5173" }));
+// CORS - allow local Vite during dev and expose download headers
+app.use(cors({
+    origin: "http://localhost:5173",
+    exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
+}));
 app.use(express.json());
 
 // Multer - memory storage, 25MB limit
@@ -35,7 +37,13 @@ app.use("/resize", limiter);
 // Simple per-IP concurrency guard (2 concurrent requests per IP)
 const ipActiveCount: Map<string, number> = new Map();
 function concurrencyGuard(req: Request, res: Response, next: NextFunction) {
-    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip;
+    const xff = req.headers["x-forwarded-for"];
+    const xffFirst = (Array.isArray(xff) ? xff[0] : xff) as string | undefined;
+    const xffStr: string = xffFirst ?? "";
+    const firstPart = xffStr.split(",")[0] || "";
+    const ipHeader = firstPart.trim();
+    const reqIp: string = typeof (req as any).ip === "string" ? (req as any).ip : "";
+    const ip: string = ipHeader || reqIp;
     const current = ipActiveCount.get(ip) ?? 0;
     if (current >= 2) {
         return res.status(429).send("Too many concurrent requests");
@@ -47,25 +55,6 @@ function concurrencyGuard(req: Request, res: Response, next: NextFunction) {
         ipActiveCount.set(ip, nextVal);
     });
     next();
-}
-
-// JWT auth middleware for /resize
-function requireJwt(req: Request, res: Response, next: NextFunction) {
-    const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-        return res.status(500).send("Server misconfigured: missing JWT_SECRET");
-    }
-    if (!token) {
-        return res.status(401).send("Missing bearer token");
-    }
-    try {
-        jwt.verify(token, secret);
-        return next();
-    } catch {
-        return res.status(401).send("Invalid token");
-    }
 }
 
 type OutputFormat = "png" | "jpeg" | "webp";
@@ -89,7 +78,6 @@ function clampDimension(value: unknown): number | null {
 
 app.post(
     "/resize",
-    requireJwt,
     concurrencyGuard,
     upload.single("logo"),
     async (req: Request, res: Response) => {
@@ -147,6 +135,8 @@ app.post(
                 return res.status(400).send("Unable to read image metadata");
             }
 
+            const baseName = (req.file.originalname || "image").replace(/\.[^.]+$/, "");
+
             // Helper to build a pipeline per output
             async function renderOne(spec: ResizeOutputSpec): Promise<{ name: string; buffer: Buffer; contentType: string }>
             {
@@ -167,7 +157,7 @@ app.post(
                 // Format-specific handling
                 let contentType = "image/png";
                 if (spec.format === "png") {
-                    pipeline = pipeline.png({ compressionLevel: 9 });
+                    pipeline = pipeline.png({ compressionLevel: 9, force: true });
                     contentType = "image/png";
                 } else if (spec.format === "jpeg") {
                     // Replace alpha with white for JPEG
@@ -175,33 +165,38 @@ app.post(
                         quality: jpegQuality,
                         progressive: true,
                         chromaSubsampling: "4:2:0",
+                        force: true,
                     });
                     contentType = "image/jpeg";
                 } else if (spec.format === "webp") {
-                    pipeline = pipeline.webp({ quality: webpQuality });
+                    pipeline = pipeline.webp({ quality: webpQuality, force: true });
                     contentType = "image/webp";
                 }
 
                 const buffer = await pipeline.toBuffer();
+                if (!buffer || buffer.length === 0) {
+                    throw new Error("Empty image buffer after processing");
+                }
 
                 // Filename
-                const base = (req.file.originalname || "image").replace(/\.[^.]+$/, "");
-                const name = `${base}_${spec.width}x${spec.height}.${spec.format}`;
+                const name = `${baseName}_${spec.width}x${spec.height}.${spec.format}`;
                 return { name, buffer, contentType };
             }
 
             if (normalized.length === 1) {
-                const out = await renderOne(normalized[0]);
+                const only = normalized[0] as ResizeOutputSpec;
+                const out = await renderOne(only);
+                res.status(200);
                 res.setHeader("Content-Type", out.contentType);
                 res.setHeader("Content-Disposition", `attachment; filename=${out.name}`);
-                return res.end(out.buffer);
+                res.setHeader("Content-Length", String(out.buffer.length));
+                return res.send(out.buffer);
             }
 
             // Multiple outputs → ZIP
             res.status(200);
             res.setHeader("Content-Type", "application/zip");
-            const base = (req.file.originalname || "image").replace(/\.[^.]+$/, "");
-            res.setHeader("Content-Disposition", `attachment; filename=${base}_resized.zip`);
+            res.setHeader("Content-Disposition", `attachment; filename=${baseName}_resized.zip`);
 
             const archive = archiver("zip", { zlib: { level: 9 } });
             archive.on("error", (err) => {
