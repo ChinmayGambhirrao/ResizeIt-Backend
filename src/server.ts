@@ -104,13 +104,23 @@ app.post(
             const jpegQuality = clampDimension(req.body.jpegQuality) ?? 85;
             const webpQuality = clampDimension(req.body.webpQuality) ?? 80;
 
-            // Outputs: JSON array passed in body as string field "outputs"
+            // Outputs: Prefer JSON array in field "outputs".
+            // Also support single-output shortcut via width/height/format fields.
             let outputs: ResizeOutputSpec[] = [];
-            try {
-                const raw = req.body.outputs;
-                outputs = Array.isArray(raw) ? raw : JSON.parse(raw);
-            } catch {
-                return res.status(400).send("Invalid outputs payload");
+            const rawOutputs = req.body.outputs;
+            if (rawOutputs !== undefined) {
+                try {
+                    outputs = Array.isArray(rawOutputs) ? rawOutputs : JSON.parse(rawOutputs);
+                } catch {
+                    return res.status(400).send("Invalid outputs payload");
+                }
+            } else {
+                const wAlt = clampDimension(req.body.width);
+                const hAlt = clampDimension(req.body.height);
+                const fAltRaw = String(req.body.format || "").toLowerCase();
+                if (wAlt && hAlt && isValidFormat(fAltRaw)) {
+                    outputs = [{ width: wAlt, height: hAlt, format: fAltRaw as OutputFormat }];
+                }
             }
             if (!Array.isArray(outputs) || outputs.length === 0) {
                 return res.status(400).send("At least one output is required");
@@ -127,6 +137,17 @@ app.post(
                 }
                 normalized.push({ width: w, height: h, format: f as OutputFormat });
             }
+
+            // De-duplicate outputs (same width/height/format)
+            const uniqueKey = (s: ResizeOutputSpec) => `${s.width}x${s.height}.${s.format}`;
+            const uniqueMap = new Map<string, ResizeOutputSpec>();
+            for (const spec of normalized) {
+                uniqueMap.set(uniqueKey(spec), spec);
+            }
+            const unique = Array.from(uniqueMap.values());
+
+            // Force single download if requested via flag
+            const forceSingle = String(req.body.single ?? req.body.forceSingle ?? "false") === "true";
 
             // Inspect source to enforce dimension constraints and autorotate
             const source = sharp(req.file.buffer, { failOn: "none" }).rotate();
@@ -183,8 +204,8 @@ app.post(
                 return { name, buffer, contentType };
             }
 
-            if (normalized.length === 1) {
-                const only = normalized[0] as ResizeOutputSpec;
+            if (unique.length === 1 || forceSingle) {
+                const only = unique[0] as ResizeOutputSpec;
                 const out = await renderOne(only);
                 res.status(200);
                 res.setHeader("Content-Type", out.contentType);
@@ -206,7 +227,7 @@ app.post(
             });
             archive.pipe(res);
 
-            for (const spec of normalized) {
+            for (const spec of unique) {
                 const out = await renderOne(spec);
                 archive.append(out.buffer, { name: out.name });
             }
