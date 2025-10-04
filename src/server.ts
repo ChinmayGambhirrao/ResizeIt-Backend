@@ -7,9 +7,24 @@ import rateLimit from "express-rate-limit";
 
 const app = express();
 
-// CORS - allow local Vite during dev and expose download headers
+// CORS - allow your Vercel domain and local development
+const allowedOrigins = [
+  "http://localhost:5173", // Vite dev server
+  "http://localhost:3000", // Alternative dev port
+  "https://resize-it-3xqk.vercel.app/" // Your actual Vercel domain
+];
+
 app.use(cors({
-    origin: "http://localhost:5173",
+    origin: function (origin, callback) {
+        // Allow requests with no origin (mobile apps, curl, etc.)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        } else {
+            return callback(new Error('Not allowed by CORS'));
+        }
+    },
     exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
 }));
 app.use(express.json());
