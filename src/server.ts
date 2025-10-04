@@ -11,7 +11,8 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:5173", // Vite dev server
   "http://localhost:3000", // Alternative dev port
-  "https://resize-it-3xqk.vercel.app/" // Your actual Vercel domain
+  "https://resize-it-3xqk.vercel.app/", // Old Vercel domain
+  "https://resize-it-eta.vercel.app" // Your current Vercel domain
 ];
 
 app.use(cors({
