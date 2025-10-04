@@ -9,11 +9,9 @@
     // See also https://aka.ms/tsconfig/module
     "module": "esnext",
     "target": "es2020",
-    "types": [],
-    // For nodejs:
-    // "lib": ["esnext"],
-    // "types": ["node"],
-    // and npm install -D @types/node
+    // Node typings so Buffer/process are available in TS
+    "lib": ["es2020"],
+    "types": ["node"],
 
     // Other Outputs
     "sourceMap": true,
@@ -41,6 +39,7 @@
     "moduleDetection": "force",
     "skipLibCheck": true,
     "moduleResolution": "node",
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
   }
 }

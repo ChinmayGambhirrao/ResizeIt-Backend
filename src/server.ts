@@ -220,7 +220,7 @@ app.post(
             res.setHeader("Content-Disposition", `attachment; filename=${baseName}_resized.zip`);
 
             const archive = archiver("zip", { zlib: { level: 9 } });
-            archive.on("error", (err) => {
+            archive.on("error", (err: unknown) => {
                 console.error(err);
                 if (!res.headersSent) res.status(500);
                 res.end("Archive error");
