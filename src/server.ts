@@ -219,7 +219,19 @@ app.post(
                 return { name, buffer, contentType };
             }
 
-            if (unique.length === 1 || forceSingle) {
+            // Always return single image when forceSingle is true, regardless of output count
+            if (forceSingle) {
+                const only = unique[0] as ResizeOutputSpec;
+                const out = await renderOne(only);
+                res.status(200);
+                res.setHeader("Content-Type", out.contentType);
+                res.setHeader("Content-Disposition", `attachment; filename=${out.name}`);
+                res.setHeader("Content-Length", String(out.buffer.length));
+                return res.send(out.buffer);
+            }
+
+            // For multiple outputs without forceSingle, return ZIP
+            if (unique.length === 1) {
                 const only = unique[0] as ResizeOutputSpec;
                 const out = await renderOne(only);
                 res.status(200);
